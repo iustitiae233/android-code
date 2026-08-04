@@ -1,0 +1,21 @@
+# ---- Android ----
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+*.iml
+
+# ---- Node ----
+backend/node_modules/
+backend/dist/
+backend/.env
+
+# ---- Claude Code 本地配置（含本机域名/权限白名单，勿传）----
+.claude/settings.local.json
+
+# ---- 通用 ----
+.DS_Store
+Thumbs.db
+*.log
