@@ -84,7 +84,7 @@ fun ChatScreen(
         }
     }
 
-    state.pendingPermission?.let { p ->
+    state.activePermission?.let { p ->
         PermissionDialog(
             toolName = p.toolName,
             summary = p.summary,

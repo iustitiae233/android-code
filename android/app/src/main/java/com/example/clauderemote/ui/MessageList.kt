@@ -175,9 +175,11 @@ private fun AssistantMessage(m: UiMessage.Assistant) {
             }
             if (!m.thinking.isNullOrBlank()) ThinkingCard(m.thinking)
             for (tc in m.toolCalls) ToolCallCard(tc)
-            if (m.costUsd != null || m.tokensIn != null || m.tokensOut != null) {
+            if (m.costUsd != null || m.tokensIn != null || m.tokensOut != null ||
+                m.cacheRead != null || m.cacheCreate != null
+            ) {
                 Spacer(Modifier.size(4.dp))
-                CostChip(m.costUsd, m.tokensIn, m.tokensOut)
+                CostChip(m.costUsd, m.tokensIn, m.tokensOut, m.cacheRead, m.cacheCreate)
             }
         }
     }
@@ -304,12 +306,20 @@ private fun ToolCallCard(tc: ToolCallInfo) {
 }
 
 @Composable
-private fun CostChip(cost: Double?, tokensIn: Int?, tokensOut: Int?) {
+private fun CostChip(
+    cost: Double?,
+    tokensIn: Int?,
+    tokensOut: Int?,
+    cacheRead: Int? = null,
+    cacheCreate: Int? = null,
+) {
     val parts = buildList {
         cost?.let { add("$%.4f".format(it)) }
         val tok = buildList {
             tokensIn?.let { add("${it}↑") }
             tokensOut?.let { add("${it}↓") }
+            cacheRead?.let { add("${it}⚡") }
+            cacheCreate?.let { add("${it}✎") }
         }.joinToString("·")
         if (tok.isNotBlank()) add("${tok} tok")
     }

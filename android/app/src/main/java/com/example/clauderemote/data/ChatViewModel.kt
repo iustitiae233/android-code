@@ -2,22 +2,29 @@ package com.example.clauderemote.data
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.util.concurrent.atomic.AtomicLong
 
 /** 工具调用展示信息 */
+@Serializable
 data class ToolCallInfo(
     val toolName: String,
     val summary: String,
-    val input: JsonElement?,
+    val input: JsonElement? = null,
     val toolUseId: String? = null,
     val result: String? = null,
     val isError: Boolean = false,
@@ -25,16 +32,19 @@ data class ToolCallInfo(
 )
 
 /** 列表里的消息（用户 / assistant 文本+工具 / 思考） */
+@Serializable
 sealed class UiMessage {
     abstract val id: String
     abstract val timestamp: Long
 
+    @Serializable @SerialName("user")
     data class User(
         val text: String,
         override val id: String = nextId(),
         override val timestamp: Long = System.currentTimeMillis(),
     ) : UiMessage()
 
+    @Serializable @SerialName("assistant")
     data class Assistant(
         val text: String = "",
         val thinking: String? = null,
@@ -43,6 +53,8 @@ sealed class UiMessage {
         val costUsd: Double? = null,
         val tokensIn: Int? = null,
         val tokensOut: Int? = null,
+        val cacheRead: Int? = null,
+        val cacheCreate: Int? = null,
         override val id: String = nextId(),
         override val timestamp: Long = System.currentTimeMillis(),
     ) : UiMessage()
@@ -76,14 +88,18 @@ data class ChatUiState(
     val isBusy: Boolean = false,
     val status: String? = null,
     val permissionMode: PermissionMode = PermissionMode.default,
-    val pendingPermission: PendingPermission? = null,
+    val pendingPermissions: List<PendingPermission> = emptyList(),
     val sessions: List<SessionInfo> = emptyList(),
     val loadingSessions: Boolean = false,
-)
+) {
+    /** 当前要弹窗的那个审批（队列首）。 */
+    val activePermission: PendingPermission? get() = pendingPermissions.firstOrNull()
+}
 
 class ChatViewModel(
     private val serverUrl: String,
     private val token: String,
+    private val store: MessageStore? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ChatUiState())
@@ -92,7 +108,9 @@ class ChatViewModel(
     private var client: WsClient? = null
 
     init {
+        loadPersisted()
         connect()
+        startPersisting()
     }
 
     fun connect() {
@@ -103,6 +121,11 @@ class ChatViewModel(
 
     fun send(prompt: String) {
         if (prompt.isBlank()) return
+        // 客户端并发守卫：服务端也有 busy 拦截，这里是体验层面的防抖。
+        if (_state.value.isBusy) {
+            _state.update { it.copy(status = "上一轮还在进行，请先中断") }
+            return
+        }
         _state.update {
             it.copy(
                 messages = it.messages + UiMessage.User(prompt),
@@ -130,6 +153,7 @@ class ChatViewModel(
                 thinking = false,
                 thinkingTokens = 0,
                 isBusy = false,
+                pendingPermissions = emptyList(),
             )
         }
     }
@@ -151,7 +175,9 @@ class ChatViewModel(
 
     fun respondPermission(requestId: String, allow: Boolean) {
         client?.send(ClientMessage.PermissionResponse(requestId, if (allow) "allow" else "deny"))
-        _state.update { it.copy(pendingPermission = null) }
+        _state.update { s ->
+            s.copy(pendingPermissions = s.pendingPermissions.filterNot { it.requestId == requestId })
+        }
     }
 
     private fun onState(s: ConnectionState, msg: String?) {
@@ -167,6 +193,8 @@ class ChatViewModel(
             }
 
             is ServerMessage.Assistant -> {
+                // 后端已把 tool_use 剥离为独立事件；这里只处理 text/thinking。
+                // 完整 assistant 文本是权威值：替换（而非追加）流式草稿，避免与 partial 重复。
                 _state.update { s ->
                     val msgs = s.messages.toMutableList()
                     val newText = m.content.filter { it.type == "text" }.joinToString("") { it.text ?: "" }
@@ -175,30 +203,16 @@ class ChatViewModel(
                         val last = msgs.indexOfLast { it is UiMessage.Assistant && it.streaming }
                         if (last >= 0) {
                             val prev = msgs[last] as UiMessage.Assistant
-                            val mergedThink = listOfNotNull(prev.thinking, thinkText.ifBlank { null }).joinToString("\n")
+                            val mergedThink = listOfNotNull(prev.thinking, thinkText.ifBlank { null })
+                                .joinToString("\n").ifBlank { null }
                             msgs[last] = prev.copy(
-                                text = prev.text + newText,
-                                thinking = mergedThink.ifBlank { null },
+                                text = newText.ifBlank { prev.text },
+                                thinking = mergedThink,
                                 streaming = false,
                             )
                         } else {
                             msgs.add(UiMessage.Assistant(text = newText, thinking = thinkText.ifBlank { null }))
                         }
-                    }
-                    for (tu in m.content.filter { it.type == "tool_use" }) {
-                        msgs.add(
-                            UiMessage.Assistant(
-                                toolCalls = listOf(
-                                    ToolCallInfo(
-                                        toolName = tu.name ?: "?",
-                                        summary = summarizeTool(tu.name, tu.input),
-                                        input = tu.input,
-                                        toolUseId = tu.id,
-                                        done = false,
-                                    )
-                                )
-                            )
-                        )
                     }
                     s.copy(messages = msgs)
                 }
@@ -262,7 +276,7 @@ class ChatViewModel(
             }
 
             is ServerMessage.Result -> {
-                val (ti, to) = parseUsage(m.usage)
+                val usage = parseUsage(m.usage)
                 val cost = m.costUsd
                 _state.update { s ->
                     val msgs = s.messages.toMutableList()
@@ -271,8 +285,10 @@ class ChatViewModel(
                         val a = msgs[idx] as UiMessage.Assistant
                         msgs[idx] = a.copy(
                             costUsd = cost ?: a.costUsd,
-                            tokensIn = ti ?: a.tokensIn,
-                            tokensOut = to ?: a.tokensOut,
+                            tokensIn = usage.input ?: a.tokensIn,
+                            tokensOut = usage.output ?: a.tokensOut,
+                            cacheRead = usage.cacheRead ?: a.cacheRead,
+                            cacheCreate = usage.cacheCreate ?: a.cacheCreate,
                             streaming = false,
                         )
                     }
@@ -286,8 +302,11 @@ class ChatViewModel(
                 }
             }
 
-            is ServerMessage.PermissionRequest -> _state.update {
-                it.copy(pendingPermission = PendingPermission(m.requestId, m.toolName, m.summary))
+            is ServerMessage.PermissionRequest -> _state.update { s ->
+                val p = PendingPermission(m.requestId, m.toolName, m.summary)
+                // 同一 requestId 不重复入队
+                if (s.pendingPermissions.any { it.requestId == m.requestId }) s
+                else s.copy(pendingPermissions = s.pendingPermissions + p)
             }
 
             is ServerMessage.Status -> _state.update { it.copy(status = m.message) }
@@ -319,11 +338,44 @@ class ChatViewModel(
         super.onCleared()
         client?.disconnect()
     }
+
+    // ── 持久化 ──
+
+    private fun loadPersisted() {
+        val s = store ?: return
+        viewModelScope.launch {
+            val saved = s.data.first()
+            if (_state.value.messages.isEmpty() && (saved.messages.isNotEmpty() || saved.sessionId != null)) {
+                // 恢复时清掉残留的 streaming 标记，避免界面一直显示输入光标。
+                val sanitized = saved.messages.map {
+                    if (it is UiMessage.Assistant && it.streaming) it.copy(streaming = false) else it
+                }
+                _state.update { it.copy(messages = sanitized, sessionId = saved.sessionId) }
+            }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun startPersisting() {
+        val s = store ?: return
+        viewModelScope.launch {
+            _state
+                .debounce(600)
+                .collect { st -> s.save(SavedConversation(st.sessionId, st.messages)) }
+        }
+    }
 }
 
 // ── 解析辅助 ──
 
 private val prettyJson = Json { prettyPrint = true }
+
+private data class Usage(
+    val input: Int? = null,
+    val output: Int? = null,
+    val cacheRead: Int? = null,
+    val cacheCreate: Int? = null,
+)
 
 private fun JsonObject?.str(key: String): String =
     (this?.get(key) as? JsonPrimitive)?.content ?: ""
@@ -353,11 +405,14 @@ private fun jsonElementToText(el: JsonElement?): String {
     return if (s.length > 4000) s.take(4000) + "\n…（截断）" else s
 }
 
-private fun parseUsage(usage: JsonElement?): Pair<Int?, Int?> {
-    val o = usage as? JsonObject ?: return null to null
-    val ti = (o["input_tokens"] as? JsonPrimitive)?.content?.toIntOrNull()
-    val to = (o["output_tokens"] as? JsonPrimitive)?.content?.toIntOrNull()
-    return ti to to
+private fun parseUsage(usage: JsonElement?): Usage {
+    val o = usage as? JsonObject ?: return Usage()
+    return Usage(
+        input = (o["input_tokens"] as? JsonPrimitive)?.content?.toIntOrNull(),
+        output = (o["output_tokens"] as? JsonPrimitive)?.content?.toIntOrNull(),
+        cacheRead = (o["cache_read_input_tokens"] as? JsonPrimitive)?.content?.toIntOrNull(),
+        cacheCreate = (o["cache_creation_input_tokens"] as? JsonPrimitive)?.content?.toIntOrNull(),
+    )
 }
 
 private fun parseSession(el: JsonElement): SessionInfo? {
@@ -430,5 +485,5 @@ fun summarizeTool(name: String?, input: JsonElement?): String {
     }
 }
 
-private var idCounter = 0
-private fun nextId(): String = "m${idCounter++}"
+private val idCounter = AtomicLong(0)
+private fun nextId(): String = "m${idCounter.incrementAndGet()}"

@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.clauderemote.data.ChatViewModel
+import com.example.clauderemote.data.MessageStore
 import com.example.clauderemote.data.SettingsStore
 import com.example.clauderemote.ui.ChatDrawerOverlay
 import com.example.clauderemote.ui.ChatScreen
@@ -48,9 +49,10 @@ class MainActivity : ComponentActivity() {
                         // 首次：必须先配置服务器与 token
                         SettingsScreen(store = store, current = s, onDone = { })
                     } else {
+                        val msgStore = remember { MessageStore(applicationContext) }
                         val vm: ChatViewModel = viewModel(
                             key = "${s.serverUrl}|${s.authToken}",
-                        ) { ChatViewModel(s.serverUrl, s.authToken) }
+                        ) { ChatViewModel(s.serverUrl, s.authToken, msgStore) }
                         val chatState by vm.state.collectAsStateWithLifecycle()
                         var drawerOpen by remember { mutableStateOf(false) }
 

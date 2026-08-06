@@ -1,18 +1,33 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { listSessions, getSessionMessages } from "@anthropic-ai/claude-agent-sdk";
-import { config } from "./config.js";
+import { config, isModeAllowed } from "./config.js";
 import { checkAuth } from "./auth.js";
 import { ClaudeConnection } from "./claude-session.js";
-import type { ClientMessage, ServerMessage } from "./protocol.js";
+import { log } from "./logger.js";
+import type { ClientMessage, ServerMessage, PermissionMode } from "./protocol.js";
 
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.2.0";
+
+/** 客户端要切换/使用某权限模式前的服务端校验，越权则发 error 并返回 false。 */
+function enforceMode(ws: WebSocket, send: (m: ServerMessage) => void, mode: string): mode is PermissionMode {
+  if (isModeAllowed(mode)) return true;
+  send({
+    type: "error",
+    message: `权限模式 ${mode} 未被服务端允许（ALLOWED_PERMISSION_MODES=${config.allowedPermissionModes.join(",")}）`,
+    code: "mode_not_allowed",
+  });
+  log.warn("perm", `拒绝越权模式: ${mode}`);
+  return false;
+}
 
 export function startServer(): void {
   const wss = new WebSocketServer({ port: config.port });
 
-  wss.on("connection", (ws) => {
+  wss.on("connection", (ws, req) => {
     let conn: ClaudeConnection | null = null;
     let authed = false;
+    const ip = req.socket.remoteAddress ?? "?";
+    log.info("ws", `新连接 ${ip}`);
 
     const send = (msg: ServerMessage): void => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -37,22 +52,30 @@ export function startServer(): void {
             config.defaultPermissionMode,
             config.model,
           );
+          log.info("ws", `鉴权成功 ${ip}`);
           send({ type: "hello", ok: true, serverVersion: SERVER_VERSION });
         } else {
+          log.warn("ws", `鉴权失败 ${ip}`);
           send({ type: "error", message: "未授权：token 无效", code: "unauthorized" });
-          ws.close();
+          // 1008 (Policy Violation)：客户端据此停止重连
+          ws.close(1008, "unauthorized");
         }
         return;
       }
 
       try {
         switch (msg.type) {
-          case "send_message":
-            await conn!.run(msg.prompt, {
-              resume: msg.sessionId,
-              permissionMode: msg.permissionMode,
-            });
+          case "send_message": {
+            if (conn!.isBusy) {
+              send({ type: "error", message: "上一轮仍在进行，请先中断后再发送", code: "busy" });
+              return;
+            }
+            let mode: PermissionMode | undefined;
+            if (msg.permissionMode && !enforceMode(ws, send, msg.permissionMode)) return;
+            mode = msg.permissionMode;
+            await conn!.run(msg.prompt, { resume: msg.sessionId, permissionMode: mode });
             break;
+          }
 
           case "permission_response":
             conn!.resolvePermission(msg.requestId, msg.decision, msg.updatedInput);
@@ -63,6 +86,7 @@ export function startServer(): void {
             break;
 
           case "set_permission_mode":
+            if (!enforceMode(ws, send, msg.mode)) return;
             conn!.setPermissionMode(msg.mode);
             send({ type: "status", message: `权限模式已切换为 ${msg.mode}` });
             break;
@@ -94,18 +118,20 @@ export function startServer(): void {
       }
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code) => {
+      log.info("ws", `连接关闭 ${ip} (${code})`);
       conn?.dispose();
     });
 
-    ws.on("error", () => {
-      /* 连接错误静默处理，避免进程崩溃 */
+    ws.on("error", (err) => {
+      log.warn("ws", `socket 错误 ${ip}: ${err.message}`);
     });
   });
 
   console.log(`✅ Claude Remote 后端已启动: ws://localhost:${config.port}`);
   console.log(`   工作目录 : ${config.defaultCwd}`);
   console.log(`   权限模式 : ${config.defaultPermissionMode}`);
+  console.log(`   允许模式 : ${config.allowedPermissionModes.join(", ")}`);
   if (config.model) console.log(`   模型     : ${config.model}`);
   console.log(`   提示     : 公网暴露请用 cloudflared + wss://，并配合 Cloudflare Access`);
 }

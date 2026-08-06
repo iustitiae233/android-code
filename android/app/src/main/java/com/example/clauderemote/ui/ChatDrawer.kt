@@ -23,10 +23,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -150,12 +152,24 @@ private fun DrawerContent(
             }
         }
 
-        Text(
-            "历史会话",
-            modifier = Modifier.padding(start = 20.dp, top = 18.dp, bottom = 4.dp),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.outline,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 18.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "历史会话",
+                modifier = Modifier.weight(1f).padding(start = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            IconButton(onClick = { vm.listSessions() }, enabled = !state.loadingSessions) {
+                Icon(
+                    Icons.Filled.Refresh,
+                    contentDescription = "刷新会话列表",
+                    tint = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
 
         when {
             state.loadingSessions && state.sessions.isEmpty() -> Box(

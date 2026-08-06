@@ -1,47 +1,9 @@
 import { query, type PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { ServerMessage, PermissionMode } from "./protocol.js";
+import { PermissionBridge } from "./permission-bridge.js";
+import { log } from "./logger.js";
 
 type SendFn = (msg: ServerMessage) => void;
-
-const PERMISSION_TIMEOUT_MS = 5 * 60_000; // 5 分钟无响应自动拒绝
-
-function randomId(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
-/** 生成人类可读的工具调用摘要，给手机弹窗展示 */
-function summarize(toolName: string, input: any): string {
-  try {
-    switch (toolName) {
-      case "Bash":
-        return `$ ${input?.command ?? ""}`;
-      case "Write":
-        return `写入文件: ${input?.file_path ?? ""}`;
-      case "Edit":
-        return `编辑文件: ${input?.file_path ?? ""}`;
-      case "Read":
-        return `读取文件: ${input?.file_path ?? ""}`;
-      case "Glob":
-        return `查找文件: ${input?.pattern ?? ""}`;
-      case "Grep":
-        return `搜索内容: ${input?.pattern ?? ""}`;
-      case "Task":
-      case "Agent":
-        return `启动子 agent: ${input?.subagent_type ?? input?.description ?? ""}`;
-      default: {
-        const s = JSON.stringify(input);
-        return `${toolName}: ${s.length > 120 ? s.slice(0, 120) + "…" : s}`;
-      }
-    }
-  } catch {
-    return toolName;
-  }
-}
-
-interface Pending {
-  resolve: (r: PermissionResult) => void;
-  timer: NodeJS.Timeout;
-}
 
 /**
  * 每条 WebSocket 连接持有一个 ClaudeConnection。
@@ -53,8 +15,8 @@ interface Pending {
  * 用 acceptEdits 或预设 allowedTools 自动放行，本类不依赖其审批。
  */
 export class ClaudeConnection {
-  private pending = new Map<string, Pending>();
-  private currentQuery: any = null;
+  private bridge: PermissionBridge;
+  private currentQuery: { interrupt?: () => void } | null = null;
   private currentMode: PermissionMode;
   private disposed = false;
 
@@ -65,56 +27,41 @@ export class ClaudeConnection {
     private readonly model?: string,
   ) {
     this.currentMode = defaultMode;
+    this.bridge = new PermissionBridge(send);
   }
 
   setPermissionMode(mode: PermissionMode): void {
     this.currentMode = mode;
   }
 
-  /** 手机端回审批结果，按 requestId 找到挂起的 Promise 并 resolve */
-  resolvePermission(requestId: string, decision: "allow" | "deny", updatedInput?: unknown): void {
-    const p = this.pending.get(requestId);
-    if (!p) return;
-    clearTimeout(p.timer);
-    this.pending.delete(requestId);
-    if (decision === "allow")
-      p.resolve({ behavior: "allow", updatedInput: updatedInput as Record<string, unknown> | undefined });
-    else p.resolve({ behavior: "deny", message: "用户在手机端拒绝了此操作" });
+  /** 当前是否正在跑一轮 agent（用于并发守卫） */
+  get isBusy(): boolean {
+    return this.currentQuery != null;
   }
 
-  /** canUseTool 回调：挂起一个 Promise，把请求推给手机，等 permission_response */
+  /** 手机端回审批结果，按 requestId 找到挂起的 Promise 并 resolve */
+  resolvePermission(requestId: string, decision: "allow" | "deny", updatedInput?: unknown): void {
+    this.bridge.resolve(requestId, decision, updatedInput);
+  }
+
+  /** canUseTool 回调：委托给 PermissionBridge */
   private canUseTool = async (
     toolName: string,
     input: unknown,
     options: { requestId?: string },
-  ): Promise<PermissionResult> => {
-    const requestId = options.requestId ?? randomId();
-    this.send({
-      type: "permission_request",
-      requestId,
-      toolName,
-      input,
-      summary: summarize(toolName, input),
-    });
+  ): Promise<PermissionResult> => this.bridge.request(toolName, input, options.requestId);
 
-    return new Promise<PermissionResult>((resolve) => {
-      const timer = setTimeout(() => {
-        if (this.pending.has(requestId)) {
-          this.pending.delete(requestId);
-          resolve({ behavior: "deny", message: "审批超时（5 分钟）自动拒绝" });
-        }
-      }, PERMISSION_TIMEOUT_MS);
-      this.pending.set(requestId, { resolve, timer });
-    });
-  };
-
-  /** 跑一轮 agent（send_message 触发） */
+  /** 跑一轮 agent（send_message 触发）。同一连接禁止并发，避免 currentQuery 被覆盖产生僵尸流。 */
   async run(
     prompt: string,
     opts: { resume?: string; permissionMode?: PermissionMode } = {},
   ): Promise<void> {
     if (this.disposed) throw new Error("连接已关闭");
+    if (this.currentQuery) throw new Error("上一轮仍在进行，请先点「中断」后再发送");
+
     const mode = opts.permissionMode ?? this.currentMode;
+    const resumeTag = opts.resume ? ` (resume ${opts.resume.slice(0, 8)})` : "";
+    log.info("query", `开始: mode=${mode}${resumeTag} prompt=${prompt.slice(0, 60)}`);
 
     const queryOpts: Record<string, unknown> = {
       prompt,
@@ -127,13 +74,14 @@ export class ClaudeConnection {
     if (this.model) queryOpts.model = this.model;
 
     const stream = query(queryOpts as any);
-    this.currentQuery = stream;
+    this.currentQuery = stream as { interrupt?: () => void };
 
     try {
       for await (const msg of stream as AsyncIterable<any>) {
         this.forward(msg);
       }
     } catch (err: any) {
+      log.error("query", `异常: ${err?.message ?? err}`);
       this.send({ type: "error", message: `query 异常: ${err?.message ?? err}`, code: "query_error" });
     } finally {
       this.currentQuery = null;
@@ -144,6 +92,7 @@ export class ClaudeConnection {
   interrupt(): void {
     try {
       this.currentQuery?.interrupt?.();
+      if (this.currentQuery) log.info("query", "用户中断");
     } catch {
       /* 忽略 */
     }
@@ -152,11 +101,7 @@ export class ClaudeConnection {
   /** 连接关闭时清理：把所有挂起的审批拒绝，避免 query 卡死 */
   dispose(): void {
     this.disposed = true;
-    for (const [, p] of this.pending) {
-      clearTimeout(p.timer);
-      p.resolve({ behavior: "deny", message: "连接已断开，自动拒绝" });
-    }
-    this.pending.clear();
+    this.bridge.denyAll();
     this.interrupt();
   }
 
@@ -187,6 +132,8 @@ export class ClaudeConnection {
 
       case "assistant": {
         const content: any[] = m.message?.content ?? [];
+        // tool_use 作为独立事件推送（携带 toolUseId，供 tool_result 匹配）；
+        // assistant 消息只承载 text/thinking，避免客户端重复渲染工具调用。
         for (const block of content) {
           if (block?.type === "tool_use") {
             this.send({
@@ -197,7 +144,8 @@ export class ClaudeConnection {
             });
           }
         }
-        this.send({ type: "assistant", messageId: m.message?.id ?? "", content });
+        const visible = content.filter((b) => b?.type !== "tool_use");
+        this.send({ type: "assistant", messageId: m.message?.id ?? "", content: visible });
         break;
       }
 
@@ -237,6 +185,10 @@ export class ClaudeConnection {
           terminalReason: m.terminal_reason,
           isError: !!m.is_error,
         });
+        log.info(
+          "query",
+          `完成: ${m.subtype ?? "success"}${typeof m.total_cost_usd === "number" ? ` $${m.total_cost_usd.toFixed(4)}` : ""}`,
+        );
         break;
 
       case "permission_denied":

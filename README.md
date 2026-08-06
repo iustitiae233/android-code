@@ -61,6 +61,27 @@ cloudflared tunnel --url http://localhost:8787
 
 如需每个工具都弹窗审批，切到原生 Anthropic 端点即可，代码无需改动。
 
+## 安全模型
+
+这个工具能让手机远程驱动 PC 上的 Claude Code（读写文件、跑命令），所以默认加了几道闸：
+
+- **明文拦截（手机端）**：`ws://` 只允许指向本机 / 局域网 IP / `.local`/`.lan`。若误填 `ws://公网域名`，客户端会直接拒绝连接并提示用 `wss://`——避免 token 明文走公网。
+- **鉴权失败即断**：token 错时后端以 `1008` 关闭连接，客户端据此**停止重连**（不会再拿错误 token 无限重试）。
+- **权限模式白名单（后端）**：`ALLOWED_PERMISSION_MODES` env 限定手机端可远程切换的模式。公网暴露时建议收紧成 `default,acceptEdits,plan`，这样即便 token 泄露，攻击者也无法把后端切到 `bypassPermissions` 任意执行。
+- **并发守卫**：同一连接上一轮未结束就发新消息会被后端拒绝（返回 `busy`），避免流互相覆盖产生僵尸查询。
+- **审批队列**：一轮里多个工具需要审批时，手机端按队列依次弹窗（不再只显示最后一个）。
+
+## 开发与测试
+
+后端用 vitest 覆盖鉴权、权限审批桥、配置解析等纯逻辑：
+
+```bash
+cd backend
+npm test            # vitest run
+npm run build       # tsc 类型检查 + 产出 dist/
+npm run dev         # tsx watch 热重载
+```
+
 ## 项目结构
 
 ```
