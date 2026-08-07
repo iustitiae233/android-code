@@ -123,6 +123,22 @@ private fun DrawerContent(
                     color = MaterialTheme.colorScheme.outline,
                 )
             }
+            // 会话累计：成本 + token（newChat 清零；GLM 通常无成本，以 token 为主）
+            val cost = state.sessionCostUsd
+            val tok = state.sessionTokensIn + state.sessionTokensOut
+            if (cost > 0.0 || tok > 0) {
+                Text(
+                    "本次会话 · " + buildString {
+                        if (cost > 0.0) append("$%.4f".format(cost))
+                        if (tok > 0) {
+                            if (isNotEmpty()) append(" · ")
+                            append("${tok} tok")
+                        }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
         }
 
         // 新对话

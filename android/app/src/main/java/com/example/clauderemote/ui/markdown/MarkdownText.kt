@@ -189,7 +189,8 @@ private fun parseBlocks(src: String): List<MdBlock> {
             }
             OL_RE.find(line) != null -> {
                 flushPara()
-                out += MdBlock.ListItem(true, OL_RE.find(line)!!.groupValues[2].trim())
+                // OL_RE 只有一个捕获组（列表内容），用 [1]；之前误写成 [2] 会越界崩溃。
+                out += MdBlock.ListItem(true, OL_RE.find(line)!!.groupValues[1].trim())
             }
             line.startsWith(">") -> {
                 flushPara()

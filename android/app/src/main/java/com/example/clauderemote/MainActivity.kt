@@ -1,9 +1,14 @@
 package com.example.clauderemote
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +18,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,12 +27,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.clauderemote.data.ChatViewModel
 import com.example.clauderemote.data.MessageStore
 import com.example.clauderemote.data.SettingsStore
+import com.example.clauderemote.data.notifyTurnDone
 import com.example.clauderemote.ui.ChatDrawerOverlay
 import com.example.clauderemote.ui.ChatScreen
 import com.example.clauderemote.ui.SettingsScreen
@@ -55,6 +68,44 @@ class MainActivity : ComponentActivity() {
                         ) { ChatViewModel(s.serverUrl, s.authToken, msgStore) }
                         val chatState by vm.state.collectAsStateWithLifecycle()
                         var drawerOpen by remember { mutableStateOf(false) }
+
+                        // ── 后台完成通知 ──
+                        val appCtx = LocalContext.current.applicationContext
+                        val lifecycleOwner = LocalLifecycleOwner.current
+                        var isForeground by remember { mutableStateOf(true) }
+                        DisposableEffect(lifecycleOwner) {
+                            // 用 ON_STOP/ON_START 判定整页进后台，避免弹窗/权限页误触发。
+                            val obs = LifecycleEventObserver { _, e ->
+                                when (e) {
+                                    Lifecycle.Event.ON_STOP -> isForeground = false
+                                    Lifecycle.Event.ON_START -> isForeground = true
+                                    else -> {}
+                                }
+                            }
+                            lifecycleOwner.lifecycle.addObserver(obs)
+                            onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+                        }
+                        // API 33+ 需运行时申请通知权限；被拒绝就静默不发，不阻塞使用。
+                        val notifPerm = rememberLauncherForActivityResult(
+                            ActivityResultContracts.RequestPermission(),
+                        ) { /* 结果无所谓：无权限时 notify 静默丢弃 */ }
+                        LaunchedEffect(Unit) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                ContextCompat.checkSelfPermission(
+                                    appCtx,
+                                    Manifest.permission.POST_NOTIFICATIONS,
+                                ) != PackageManager.PERMISSION_GRANTED
+                            ) {
+                                notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        }
+                        // 一轮结束：若此刻 app 在后台，弹通知。
+                        LaunchedEffect(chatState.lastTurnResult?.id) {
+                            val r = chatState.lastTurnResult ?: return@LaunchedEffect
+                            if (!isForeground) {
+                                runCatching { notifyTurnDone(appCtx, r.summary, r.isError) }
+                            }
+                        }
 
                         when (screen) {
                             Nav.Chat -> Box(Modifier.fillMaxSize()) {

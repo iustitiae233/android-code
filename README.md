@@ -65,6 +65,7 @@ cd android && ./gradlew assembleDebug
 - 工具调用可见（看 AI 在干什么）
 - 会话续接（基于 sessionId resume）
 - 中断 / 成本 / 思考进度
+- 后台完成通知（手机端：任务在后台跑完时弹通知）
 
 如需每个工具都弹窗审批，切到原生 Anthropic 端点即可，代码无需改动。
 

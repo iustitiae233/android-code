@@ -61,6 +61,7 @@ import com.example.clauderemote.ui.theme.SuccessColor
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 @Composable
 fun MessageList(
@@ -76,7 +77,10 @@ fun MessageList(
     }
 
     LaunchedEffect(messages.size, thinking) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+        if (messages.isEmpty()) return@LaunchedEffect
+        // 思考指示是 messages 之后的额外 item；有思考时滚到它，否则滚到最后一条消息。
+        val last = if (thinking) messages.size else messages.lastIndex
+        listState.animateScrollToItem(last)
     }
 
     LazyColumn(
@@ -167,7 +171,13 @@ private fun AssistantMessage(m: UiMessage.Assistant) {
                     modifier = Modifier.clickable { clipboard.setText(AnnotatedString(m.text)) },
                 ) {
                     Column(Modifier.padding(12.dp)) {
-                        MarkdownText(m.text, style = MaterialTheme.typography.bodyLarge)
+                        // 流式进行中用纯文本：m.text 每个 token 都变，若每次都跑 parseBlocks
+                        // 会对整段已收文字重排版，长回答会严重掉帧。结束后再切回 Markdown。
+                        if (m.streaming) {
+                            Text(m.text, style = MaterialTheme.typography.bodyLarge)
+                        } else {
+                            MarkdownText(m.text, style = MaterialTheme.typography.bodyLarge)
+                        }
                         if (m.streaming) StreamingCaret()
                     }
                 }
@@ -415,6 +425,14 @@ private fun ThinkingIndicator(tokens: Int) {
         animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
         label = "thinkAlpha",
     )
+    // 计时：每秒 +1，让指示器一直在动，避免长时间无事件时看起来像「卡死」。
+    var elapsed by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            elapsed++
+        }
+    }
     Row(
         modifier = Modifier.padding(horizontal = 2.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -425,8 +443,12 @@ private fun ThinkingIndicator(tokens: Int) {
             MaterialTheme.colorScheme.onSecondaryContainer,
         )
         Spacer(Modifier.width(6.dp))
+        val label = buildString {
+            append("思考中… ${elapsed}s")
+            if (tokens > 0) append(" · $tokens tokens")
+        }
         Text(
-            if (tokens > 0) "思考中… $tokens tokens" else "思考中…",
+            label,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.outline.copy(alpha = alpha),
         )

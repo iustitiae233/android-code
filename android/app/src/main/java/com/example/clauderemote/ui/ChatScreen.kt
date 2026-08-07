@@ -11,16 +11,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddComment
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -28,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.clauderemote.data.ChatViewModel
 import com.example.clauderemote.data.ConnectionState
+import kotlinx.coroutines.launch
 
 /**
  * 聊天主界面。DeepSeek 风格：无标题栏，左上角菜单按钮呼出会话抽屉，右上角新对话。
@@ -40,6 +46,15 @@ fun ChatScreen(
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    // 不在底部时显示「回到底部」按钮：以最后一个可见 item 是否到达列表末端判定。
+    val showJumpBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            info.totalItemsCount > 0 && lastVisible < info.totalItemsCount - 1
+        }
+    }
 
     Scaffold(modifier = modifier) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -65,6 +80,17 @@ fun ChatScreen(
                     listState = listState,
                     onSend = vm::send,
                 )
+                if (showJumpBottom) {
+                    SmallFloatingActionButton(
+                        onClick = {
+                            val last = listState.layoutInfo.totalItemsCount - 1
+                            if (last >= 0) scope.launch { listState.animateScrollToItem(last) }
+                        },
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                    ) {
+                        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "回到底部")
+                    }
+                }
             }
             state.status?.let { status ->
                 Text(

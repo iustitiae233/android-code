@@ -74,6 +74,9 @@ data class PendingPermission(
     val summary: String,
 )
 
+/** 一轮结束的结果摘要（成本 / 错误 / 回复片段），用于后台完成通知。 */
+data class TurnResult(val id: Long, val isError: Boolean, val summary: String)
+
 data class ChatUiState(
     val messages: List<UiMessage> = emptyList(),
     val connection: ConnectionState = ConnectionState.Disconnected,
@@ -85,6 +88,12 @@ data class ChatUiState(
     val thinking: Boolean = false,
     val thinkingTokens: Int = 0,
     val lastCost: Double? = null,
+    /** 本次会话累计：跨多轮的成本与 token，newChat 时清零。 */
+    val sessionCostUsd: Double = 0.0,
+    val sessionTokensIn: Int = 0,
+    val sessionTokensOut: Int = 0,
+    /** 最近一轮结束的快照，供后台完成通知监听（id 单调递增触发 LaunchedEffect）。 */
+    val lastTurnResult: TurnResult? = null,
     val isBusy: Boolean = false,
     val status: String? = null,
     val permissionMode: PermissionMode = PermissionMode.default,
@@ -106,6 +115,7 @@ class ChatViewModel(
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
 
     private var client: WsClient? = null
+    private val turnSeq = AtomicLong(0)
 
     init {
         loadPersisted()
@@ -121,9 +131,16 @@ class ChatViewModel(
 
     fun send(prompt: String) {
         if (prompt.isBlank()) return
+        val st = _state.value
         // 客户端并发守卫：服务端也有 busy 拦截，这里是体验层面的防抖。
-        if (_state.value.isBusy) {
+        if (st.isBusy) {
             _state.update { it.copy(status = "上一轮还在进行，请先中断") }
+            return
+        }
+        // 连接守卫：未连上就发，client.send 会静默失败 → 气泡已加、thinking 常亮，
+        // 表现为「永远卡在思考中」。这里直接拦下并提示，等重连成功再发。
+        if (st.connection != ConnectionState.Connected) {
+            _state.update { it.copy(status = "未连接，正在重连…连上后再发") }
             return
         }
         _state.update {
@@ -135,7 +152,24 @@ class ChatViewModel(
                 status = null,
             )
         }
-        client?.send(ClientMessage.SendMessage(prompt = prompt, sessionId = _state.value.sessionId))
+        val sent = client?.send(
+            ClientMessage.SendMessage(prompt = prompt, sessionId = _state.value.sessionId)
+        ) ?: false
+        if (!sent) {
+            // 极少情况：检查时已连接，发的那一刻 ws 刚断。精确回滚刚加的最后一条用户气泡与忙碌态，避免假死。
+            _state.update { s ->
+                val trimmed = s.messages.toMutableList().also { ml ->
+                    val last = ml.lastOrNull()
+                    if (last is UiMessage.User && last.text == prompt) ml.removeAt(ml.lastIndex)
+                }
+                s.copy(
+                    messages = trimmed,
+                    isBusy = false,
+                    thinking = false,
+                    status = "发送失败：连接已断开，正在重连",
+                )
+            }
+        }
     }
 
     fun interrupt() {
@@ -150,6 +184,9 @@ class ChatViewModel(
                 sessionId = null,
                 status = null,
                 lastCost = null,
+                sessionCostUsd = 0.0,
+                sessionTokensIn = 0,
+                sessionTokensOut = 0,
                 thinking = false,
                 thinkingTokens = 0,
                 isBusy = false,
@@ -181,7 +218,21 @@ class ChatViewModel(
     }
 
     private fun onState(s: ConnectionState, msg: String?) {
-        _state.update { it.copy(connection = s, connectionMsg = msg) }
+        _state.update { st ->
+            if (s == ConnectionState.Disconnected || s == ConnectionState.Error) {
+                // 连接断了：进行中的那轮在后端已被 interrupt，这里必须重置忙碌/思考/挂起审批，
+                // 否则 UI 会一直卡在「思考中」，发新消息也会被 busy 守卫挡住。
+                st.copy(
+                    connection = s,
+                    connectionMsg = msg,
+                    isBusy = false,
+                    thinking = false,
+                    pendingPermissions = emptyList(),
+                )
+            } else {
+                st.copy(connection = s, connectionMsg = msg)
+            }
+        }
     }
 
     private fun onMessage(m: ServerMessage) {
@@ -245,7 +296,8 @@ class ChatViewModel(
                     } else {
                         msgs.add(UiMessage.Assistant(text = m.textDelta, streaming = true))
                     }
-                    s.copy(messages = msgs)
+                    // 文本开始流式输出，不再是「纯思考」阶段：关掉思考指示。
+                    s.copy(messages = msgs, thinking = false)
                 }
             }
 
@@ -267,7 +319,8 @@ class ChatViewModel(
                     } else {
                         msgs.add(UiMessage.Assistant(toolCalls = listOf(info)))
                     }
-                    s.copy(messages = msgs)
+                    // 开始跑工具了，不再是「纯思考」阶段：关掉思考指示。
+                    s.copy(messages = msgs, thinking = false)
                 }
             }
 
@@ -300,6 +353,7 @@ class ChatViewModel(
                 _state.update { s ->
                     val msgs = s.messages.toMutableList()
                     val idx = msgs.indexOfLast { it is UiMessage.Assistant }
+                    val lastText = (msgs.getOrNull(idx) as? UiMessage.Assistant)?.text.orEmpty()
                     if (idx >= 0) {
                         val a = msgs[idx] as UiMessage.Assistant
                         msgs[idx] = a.copy(
@@ -311,11 +365,25 @@ class ChatViewModel(
                             streaming = false,
                         )
                     }
+                    // 通知用摘要：出错给原因，否则给回复片段 + 成本。
+                    val summary = buildString {
+                        if (m.isError) {
+                            append("出错: ${m.subtype}")
+                        } else {
+                            val snip = lastText.replace("\n", " ").trim()
+                            if (snip.isBlank()) append("已收到回复") else append(if (snip.length > 80) snip.take(80) + "…" else snip)
+                            cost?.let { append("  · $%.4f".format(it)) }
+                        }
+                    }
                     s.copy(
                         messages = msgs,
                         isBusy = false,
                         thinking = false,
                         lastCost = cost ?: s.lastCost,
+                        sessionCostUsd = s.sessionCostUsd + (cost ?: 0.0),
+                        sessionTokensIn = s.sessionTokensIn + (usage.input ?: 0),
+                        sessionTokensOut = s.sessionTokensOut + (usage.output ?: 0),
+                        lastTurnResult = TurnResult(turnSeq.incrementAndGet(), m.isError, summary),
                         status = if (m.isError) "出错: ${m.subtype}" else s.status,
                     )
                 }
