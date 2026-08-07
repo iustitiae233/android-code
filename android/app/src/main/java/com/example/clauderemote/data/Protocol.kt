@@ -60,7 +60,12 @@ sealed class ClientMessage {
 @Serializable
 sealed class ServerMessage {
     @Serializable @SerialName("hello")
-    data class Hello(val ok: Boolean, val serverVersion: String) : ServerMessage()
+    data class Hello(
+        val ok: Boolean,
+        val serverVersion: String,
+        val cwd: String? = null,
+        val availableCwds: List<String> = emptyList(),
+    ) : ServerMessage()
 
     @Serializable @SerialName("error")
     data class Error(val message: String, val code: String? = null) : ServerMessage()

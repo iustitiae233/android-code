@@ -54,7 +54,13 @@ export function startServer(): void {
             config.projectDirs,
           );
           log.info("ws", `鉴权成功 ${ip}`);
-          send({ type: "hello", ok: true, serverVersion: SERVER_VERSION });
+          send({
+            type: "hello",
+            ok: true,
+            serverVersion: SERVER_VERSION,
+            cwd: config.defaultCwd,
+            availableCwds: config.projectDirs,
+          });
         } else {
           log.warn("ws", `鉴权失败 ${ip}`);
           send({ type: "error", message: "未授权：token 无效", code: "unauthorized" });

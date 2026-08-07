@@ -258,7 +258,13 @@ class ChatViewModel(
 
     private fun onMessage(m: ServerMessage) {
         when (m) {
-            is ServerMessage.Hello -> _state.update { it.copy(connection = ConnectionState.Connected) }
+            is ServerMessage.Hello -> _state.update {
+                it.copy(
+                    connection = ConnectionState.Connected,
+                    cwd = m.cwd ?: it.cwd,
+                    availableCwds = m.availableCwds.ifEmpty { it.availableCwds },
+                )
+            }
 
             is ServerMessage.SystemInit -> _state.update {
                 it.copy(

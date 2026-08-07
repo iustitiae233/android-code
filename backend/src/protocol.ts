@@ -21,7 +21,7 @@ export type ClientMessage =
 
 // ────────────── 服务端 → 客户端 ──────────────
 export type ServerMessage =
-  | { type: "hello"; ok: true; serverVersion: string }
+  | { type: "hello"; ok: true; serverVersion: string; cwd: string; availableCwds?: string[] }
   | { type: "error"; message: string; code?: string }
   | { type: "system"; sessionId: string; tools: string[]; model: string; cwd: string; availableCwds?: string[] }
   | { type: "assistant"; messageId: string; content: unknown[] }
