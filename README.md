@@ -50,6 +50,13 @@ cloudflared tunnel --url http://localhost:8787
 
 用 **Android Studio** 打开 `android/` 目录 → Run ▶ → 首次进入设置页填地址 + token → 保存即连接。详见 [`android/README.md`](android/README.md)。
 
+或命令行出 APK（需 JDK 17）：
+
+```bash
+cd android && ./gradlew assembleDebug
+# 产物：app/build/outputs/apk/debug/app-debug.apk
+```
+
 ## 关于「工具审批弹窗」
 
 后端用 `canUseTool` 实现了完整的异步审批机制（手机弹窗 → 用户允许/拒绝）。但**智谱 GLM 兼容端点会自动放行所有工具**，审批不触发（实测确认）。当前 MVP 因此聚焦：
@@ -65,7 +72,7 @@ cloudflared tunnel --url http://localhost:8787
 
 这个工具能让手机远程驱动 PC 上的 Claude Code（读写文件、跑命令），所以默认加了几道闸：
 
-- **明文拦截（手机端）**：`ws://` 只允许指向本机 / 局域网 IP / `.local`/`.lan`。若误填 `ws://公网域名`，客户端会直接拒绝连接并提示用 `wss://`——避免 token 明文走公网。
+- **明文提示（手机端）**：`ws://` 指向公网域名时，客户端**照常连接**，只在连接条提示一句「token 未加密，建议 wss://」——不硬拦，方便你连自建明文后端。只有地址格式错误才直接拒绝。能用 `wss://`（如 cloudflare 隧道）就尽量用，避免 token 明文走公网。
 - **鉴权失败即断**：token 错时后端以 `1008` 关闭连接，客户端据此**停止重连**（不会再拿错误 token 无限重试）。
 - **权限模式白名单（后端）**：`ALLOWED_PERMISSION_MODES` env 限定手机端可远程切换的模式。公网暴露时建议收紧成 `default,acceptEdits,plan`，这样即便 token 泄露，攻击者也无法把后端切到 `bypassPermissions` 任意执行。
 - **并发守卫**：同一连接上一轮未结束就发新消息会被后端拒绝（返回 `busy`），避免流互相覆盖产生僵尸查询。
@@ -81,6 +88,10 @@ npm test            # vitest run
 npm run build       # tsc 类型检查 + 产出 dist/
 npm run dev         # tsx watch 热重载
 ```
+
+### 版本号（Android）
+
+`versionCode` / `versionName` 由 git 提交数自动生成（`app/build.gradle.kts` 读 `git rev-list --count HEAD`）：每多一个提交版本号就往上走，安装时自动当作升级。所以**改完东西先 commit 再构建**，版本才会更新。
 
 ## 项目结构
 
