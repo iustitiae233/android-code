@@ -46,6 +46,7 @@ npm install
 | `AUTH_TOKEN` | **必填**。手机端鉴权用，自己设长随机串，两边一致 | 见下方生成命令 |
 | `PORT` | 监听端口 | `8787` |
 | `DEFAULT_CWD` | Claude Code 工作目录（读写文件范围） | `C:\Users\you\projects` |
+| `PROJECT_DIRS` | 手机端可切换的工作目录白名单（逗号/分号），始终含 `DEFAULT_CWD`；留空则只能用默认目录 | `C:\a;C:\b` |
 | `MODEL` | 模型，留空则用本机 `claude` 配置 | `claude-sonnet-4-5` |
 | `PERMISSION_MODE` | 默认权限模式 | `default` |
 | `ALLOWED_PERMISSION_MODES` | 手机端可远程切换的模式（逗号分隔），留空=全部 | `default,acceptEdits,plan` |

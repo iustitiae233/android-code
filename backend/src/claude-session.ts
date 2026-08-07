@@ -19,19 +19,32 @@ export class ClaudeConnection {
   private currentQuery: { interrupt?: () => void } | null = null;
   private currentMode: PermissionMode;
   private disposed = false;
+  private currentCwd: string;
 
   constructor(
     private readonly send: SendFn,
-    private readonly cwd: string,
+    cwd: string,
     defaultMode: PermissionMode,
     private readonly model?: string,
+    private readonly availableCwds: string[] = [],
   ) {
     this.currentMode = defaultMode;
+    this.currentCwd = cwd;
     this.bridge = new PermissionBridge(send);
   }
 
   setPermissionMode(mode: PermissionMode): void {
     this.currentMode = mode;
+  }
+
+  /** 切换工作目录（调用前由 server 校验过白名单） */
+  setCwd(cwd: string): void {
+    this.currentCwd = cwd;
+  }
+
+  /** 当前工作目录（listSessions 等复用） */
+  get cwd(): string {
+    return this.currentCwd;
   }
 
   /** 当前是否正在跑一轮 agent（用于并发守卫） */
@@ -125,6 +138,7 @@ export class ClaudeConnection {
               .filter(Boolean),
             model: m.model ?? "",
             cwd: m.cwd ?? this.cwd,
+            availableCwds: this.availableCwds,
           });
         }
         break;

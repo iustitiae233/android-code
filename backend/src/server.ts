@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { listSessions, getSessionMessages } from "@anthropic-ai/claude-agent-sdk";
-import { config, isModeAllowed } from "./config.js";
+import { config, isModeAllowed, isDirAllowed } from "./config.js";
 import { checkAuth } from "./auth.js";
 import { ClaudeConnection } from "./claude-session.js";
 import { log } from "./logger.js";
@@ -51,6 +51,7 @@ export function startServer(): void {
             config.defaultCwd,
             config.defaultPermissionMode,
             config.model,
+            config.projectDirs,
           );
           log.info("ws", `鉴权成功 ${ip}`);
           send({ type: "hello", ok: true, serverVersion: SERVER_VERSION });
@@ -91,8 +92,17 @@ export function startServer(): void {
             send({ type: "status", message: `权限模式已切换为 ${msg.mode}` });
             break;
 
+          case "set_cwd":
+            if (!isDirAllowed(msg.cwd)) {
+              send({ type: "error", message: `工作目录不在白名单内: ${msg.cwd}`, code: "cwd_not_allowed" });
+              return;
+            }
+            conn!.setCwd(msg.cwd);
+            send({ type: "status", message: `工作目录已切换为 ${msg.cwd}` });
+            break;
+
           case "list_sessions": {
-            const sessions = await listSessions({ dir: msg.dir ?? config.defaultCwd });
+            const sessions = await listSessions({ dir: msg.dir ?? conn!.cwd });
             send({ type: "session_list", sessions: sessions as unknown[] });
             break;
           }

@@ -84,6 +84,7 @@ data class ChatUiState(
     val sessionId: String? = null,
     val model: String? = null,
     val cwd: String? = null,
+    val availableCwds: List<String> = emptyList(),
     val tools: List<String> = emptyList(),
     val thinking: Boolean = false,
     val thinkingTokens: Int = 0,
@@ -200,6 +201,26 @@ class ChatViewModel(
         client?.send(ClientMessage.SetPermissionMode(mode))
     }
 
+    /** 切换工作目录：发 set_cwd，并清空当前会话（新目录 = 新项目上下文，下条消息开新会话）。 */
+    fun setCwd(path: String) {
+        client?.send(ClientMessage.SetCwd(path))
+        _state.update {
+            it.copy(
+                cwd = path,
+                sessionId = null,
+                messages = emptyList(),
+                status = "工作目录：$path",
+                sessionCostUsd = 0.0,
+                sessionTokensIn = 0,
+                sessionTokensOut = 0,
+                thinking = false,
+                thinkingTokens = 0,
+                isBusy = false,
+                pendingPermissions = emptyList(),
+            )
+        }
+    }
+
     fun listSessions() {
         _state.update { it.copy(loadingSessions = true) }
         client?.send(ClientMessage.ListSessions())
@@ -240,7 +261,13 @@ class ChatViewModel(
             is ServerMessage.Hello -> _state.update { it.copy(connection = ConnectionState.Connected) }
 
             is ServerMessage.SystemInit -> _state.update {
-                it.copy(sessionId = m.sessionId, model = m.model.ifBlank { it.model }, cwd = m.cwd, tools = m.tools)
+                it.copy(
+                    sessionId = m.sessionId,
+                    model = m.model.ifBlank { it.model },
+                    cwd = m.cwd,
+                    tools = m.tools,
+                    availableCwds = m.availableCwds,
+                )
             }
 
             is ServerMessage.Assistant -> {

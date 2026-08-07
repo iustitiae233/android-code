@@ -23,19 +23,25 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -108,6 +114,7 @@ private fun DrawerContent(
     onOpenSettings: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
+        var showCwdPicker by remember { mutableStateOf(false) }
         // 顶部品牌 + 模型
         Column(
             Modifier
@@ -122,6 +129,35 @@ private fun DrawerContent(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
+            }
+            // 当前工作目录：点按可从白名单切换（availableCwds > 1 时才可点）。
+            state.cwd?.let { path ->
+                val dirs = state.availableCwds
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = dirs.size > 1) { showCwdPicker = true }
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "📁 $path",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.outline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (dirs.size > 1) {
+                        Icon(
+                            Icons.Filled.ExpandMore,
+                            contentDescription = "切换目录",
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
             }
             // 会话累计：成本 + token（newChat 清零；GLM 通常无成本，以 token 为主）
             val cost = state.sessionCostUsd
@@ -225,6 +261,41 @@ private fun DrawerContent(
             leadingContent = { Icon(Icons.Filled.Settings, contentDescription = null) },
             modifier = Modifier.fillMaxWidth().clickable { onOpenSettings() },
         )
+
+        // 工作目录选择器：从后端下发的白名单里挑，切目录 = 开新项目（清空当前会话）。
+        if (showCwdPicker) {
+            AlertDialog(
+                onDismissRequest = { showCwdPicker = false },
+                title = { Text("选择工作目录") },
+                text = {
+                    Column {
+                        state.availableCwds.forEach { d ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { vm.setCwd(d); showCwdPicker = false }
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = d == state.cwd,
+                                    onClick = { vm.setCwd(d); showCwdPicker = false },
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    d,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+            )
+        }
     }
 }
 

@@ -16,13 +16,14 @@ export type ClientMessage =
   | { type: "permission_response"; requestId: string; decision: "allow" | "deny"; updatedInput?: unknown }
   | { type: "list_sessions"; dir?: string }
   | { type: "load_session"; sessionId: string }
-  | { type: "set_permission_mode"; mode: PermissionMode };
+  | { type: "set_permission_mode"; mode: PermissionMode }
+  | { type: "set_cwd"; cwd: string };
 
 // ────────────── 服务端 → 客户端 ──────────────
 export type ServerMessage =
   | { type: "hello"; ok: true; serverVersion: string }
   | { type: "error"; message: string; code?: string }
-  | { type: "system"; sessionId: string; tools: string[]; model: string; cwd: string }
+  | { type: "system"; sessionId: string; tools: string[]; model: string; cwd: string; availableCwds?: string[] }
   | { type: "assistant"; messageId: string; content: unknown[] }
   | { type: "assistant_partial"; textDelta: string }
   | { type: "thinking_progress"; estimatedTokens: number; delta: number }

@@ -46,6 +46,9 @@ sealed class ClientMessage {
     @Serializable @SerialName("set_permission_mode")
     data class SetPermissionMode(val mode: PermissionMode) : ClientMessage()
 
+    @Serializable @SerialName("set_cwd")
+    data class SetCwd(val cwd: String) : ClientMessage()
+
     @Serializable @SerialName("list_sessions")
     data class ListSessions(val dir: String? = null) : ClientMessage()
 
@@ -68,6 +71,7 @@ sealed class ServerMessage {
         val tools: List<String>,
         val model: String,
         val cwd: String,
+        val availableCwds: List<String> = emptyList(),
     ) : ServerMessage()
 
     @Serializable @SerialName("assistant")
