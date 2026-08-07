@@ -13,6 +13,14 @@
 - **`backend/`** — Node.js + TypeScript + [`@anthropic-ai/claude-agent-sdk`](https://code.claude.com/docs/en/agent-sdk/typescript)。WebSocket server，把 Claude Code 的流式输出（文本 / 工具调用 / 思考进度 / 成本）转发给手机，并桥接工具调用的权限审批。
 - **`android/`** — Kotlin + Jetpack Compose。手机客户端。
 
+## 界面预览
+
+<p align="center">
+  <img src="ui.jpg" width="320" alt="Claude Remote 手机端界面" />
+</p>
+
+手机端：流式聊天、工具调用卡片（可折叠）、思考进度、抽屉里的会话历史与累计成本。
+
 ## 快速开始
 
 ### 前置条件
