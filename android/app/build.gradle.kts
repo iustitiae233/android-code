@@ -13,8 +13,13 @@ android {
         applicationId = "com.example.clauderemote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // 版本随 git 提交数自动递增：每次 commit 后构建，versionCode 都会变大，
+        // 满足 Android「升级必须 versionCode 递增」的要求；versionName 方便人读。
+        val commitCount = providers.exec {
+            commandLine("git", "rev-list", "--count", "HEAD")
+        }.standardOutput.asText.get().trim().toInt()
+        versionCode = commitCount
+        versionName = "0.2.$commitCount"
     }
 
     buildTypes {

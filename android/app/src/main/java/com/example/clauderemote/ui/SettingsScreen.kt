@@ -108,7 +108,8 @@ fun SettingsScreen(
             Text(
                 "• 局域网：ws://电脑IP:8787\n" +
                     "• 外网：wss://你的 cloudflare 隧道域名\n" +
-                    "• token 与后端 .env 的 AUTH_TOKEN 保持一致",
+                    "• token 与后端 .env 的 AUTH_TOKEN 保持一致\n" +
+                    "• ws:// 连公网会明文传 token，能用 wss:// 更好",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline,
             )

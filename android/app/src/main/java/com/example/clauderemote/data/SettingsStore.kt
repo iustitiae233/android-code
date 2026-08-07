@@ -14,7 +14,7 @@ data class ServerSettings(
     val authToken: String = "",
 )
 
-/** 用 DataStore 持久化服务器地址和 token。 */
+/** 用 DataStore 持久化服务器地址与 token。 */
 class SettingsStore(private val context: Context) {
     private val SERVER_URL = stringPreferencesKey("server_url")
     private val AUTH_TOKEN = stringPreferencesKey("auth_token")

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 主题化图标（Android 13+）的单色层：系统会按桌面主题着色。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M54,24 C57.5,44.5 63.5,50.5 84,54 C63.5,57.5 57.5,63.5 54,84 C50.5,63.5 44.5,57.5 24,54 C44.5,50.5 50.5,44.5 54,24 Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

@@ -174,7 +174,11 @@ private fun AssistantMessage(m: UiMessage.Assistant) {
                 Timestamp(m.timestamp)
             }
             if (!m.thinking.isNullOrBlank()) ThinkingCard(m.thinking)
-            for (tc in m.toolCalls) ToolCallCard(tc)
+            if (m.toolCalls.size >= 2) {
+                ToolGroupCard(m.toolCalls)
+            } else {
+                for (tc in m.toolCalls) ToolCallCard(tc)
+            }
             if (m.costUsd != null || m.tokensIn != null || m.tokensOut != null ||
                 m.cacheRead != null || m.cacheCreate != null
             ) {
@@ -238,6 +242,71 @@ private fun ThinkingCard(thinking: String) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 一轮里多个工具调用的折叠分组：默认收起成一行「执行了 N 个操作 + 计数」，
+ * 展开后才列出各 ToolCallCard。避免手机上连续 Read/Bash 刷屏。
+ */
+@Composable
+private fun ToolGroupCard(toolCalls: List<ToolCallInfo>) {
+    var expanded by remember { mutableStateOf(false) }
+    val anyError = toolCalls.any { it.isError }
+    val allDone = toolCalls.all { it.done }
+    val (icon, tint) = when {
+        anyError -> Icons.Filled.ErrorOutline to MaterialTheme.colorScheme.error
+        allDone -> Icons.Filled.CheckCircle to SuccessColor
+        else -> Icons.Filled.HourglassTop to MaterialTheme.colorScheme.tertiary
+    }
+    val counts = toolCalls
+        .groupingBy { it.toolName }
+        .eachCount()
+        .entries
+        .joinToString(" · ") { (name, n) -> "$name ×$n" }
+    Surface(
+        color = tint.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("执行了 ${toolCalls.size} 个操作", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        counts,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = if (expanded) Int.MAX_VALUE else 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Icon(
+                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            if (expanded) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Column(
+                    Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    for (tc in toolCalls) ToolCallCard(tc)
+                }
             }
         }
     }

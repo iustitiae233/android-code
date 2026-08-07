@@ -35,16 +35,17 @@ class WsClient(
         .build()
 
     fun connect() {
-        // 安全闸：明文 ws:// 只允许指向局域网/本机，避免 token 明文走公网。
-        val issue = insecureUrlIssue(url)
-        if (issue != null) {
+        // 只硬拦格式错误的地址；明文 ws:// 是否连公网由用户自行决定（其自有后端可能就是
+        // ws://）。公网明文不拦截，只在连接条提示一句「token 未加密」。
+        val (check, msg) = classifyUrl(url)
+        if (check == UrlCheck.Invalid) {
             shouldReconnect = false
-            onState(ConnectionState.Error, issue)
+            onState(ConnectionState.Error, msg)
             return
         }
-
         shouldReconnect = true
-        onState(ConnectionState.Connecting, null)
+        val warn = if (check == UrlCheck.InsecurePublic) "⚠ 明文公网：token 未加密，建议 wss://" else null
+        onState(ConnectionState.Connecting, warn)
         val req = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $token")
@@ -109,17 +110,32 @@ class WsClient(
     }
 }
 
+/** URL 校验结果：Ok=可连；InsecurePublic=明文公网（硬拦）；Invalid=不可放行。 */
+private enum class UrlCheck { Ok, InsecurePublic, Invalid }
+
 /**
- * 检查明文 URL 的安全性。返回 null=安全可连；非 null=问题描述（应阻止连接）。
- * 规则：wss:// 一律放行；ws:// 仅当主机是本机/局域网/内网域名时放行。
+ * 分类 URL 的安全性。规则：wss/https 一律 Ok；ws/http 指向本机/局域网=Ok，
+ * 指向公网=InsecurePublic（硬拦）；解析不了=Invalid（硬拦）。
+ *
+ * 注意：OkHttp 的 HttpUrl 解析器不认 ws:// / wss://（只有 Request.Builder.url() 会做
+ * ws→http、wss→https 改写），所以这里先复刻该改写，再解析、判断明文与否。
  */
-private fun insecureUrlIssue(rawUrl: String): String? {
-    val u = rawUrl.toHttpUrlOrNull() ?: return "地址格式无效"
-    val isCleartext = u.scheme == "ws" || u.scheme == "http"
-    if (!isCleartext) return null // wss/https 加密，放行
+private fun classifyUrl(rawUrl: String): Pair<UrlCheck, String?> {
+    val trimmed = rawUrl.trim()
+    if (trimmed.isEmpty()) return UrlCheck.Invalid to "地址为空"
+    val lower = trimmed.lowercase()
+    val isCleartext = lower.startsWith("ws://") || lower.startsWith("http://")
+    val forParse = when {
+        lower.startsWith("ws://") -> "http://" + trimmed.substring(5)
+        lower.startsWith("wss://") -> "https://" + trimmed.substring(6)
+        else -> trimmed
+    }
+    val u = forParse.toHttpUrlOrNull()
+        ?: return UrlCheck.Invalid to "地址格式无效：$trimmed"
+    if (!isCleartext) return UrlCheck.Ok to null // wss/https 加密
     val host = u.host
-    return if (isPrivateHost(host)) null
-    else "明文 ws:// 指向公网主机「$host」，token 会被窃听。请改用 wss://（cloudflare 隧道）或局域网 IP。"
+    return if (isPrivateHost(host)) UrlCheck.Ok to null
+    else UrlCheck.InsecurePublic to "明文 ws:// 指向公网主机「$host」，token 会被窃听。"
 }
 
 /** 判断主机是否属于本机/局域网。支持 IPv4/IPv6 字面量与常见内网域名后缀。 */

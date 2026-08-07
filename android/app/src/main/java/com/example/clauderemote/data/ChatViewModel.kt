@@ -200,18 +200,35 @@ class ChatViewModel(
                     val newText = m.content.filter { it.type == "text" }.joinToString("") { it.text ?: "" }
                     val thinkText = m.content.filter { it.type == "thinking" }.joinToString("\n") { it.thinking ?: "" }
                     if (newText.isNotBlank() || thinkText.isNotBlank()) {
-                        val last = msgs.indexOfLast { it is UiMessage.Assistant && it.streaming }
-                        if (last >= 0) {
-                            val prev = msgs[last] as UiMessage.Assistant
-                            val mergedThink = listOfNotNull(prev.thinking, thinkText.ifBlank { null })
-                                .joinToString("\n").ifBlank { null }
-                            msgs[last] = prev.copy(
-                                text = newText.ifBlank { prev.text },
-                                thinking = mergedThink,
-                                streaming = false,
-                            )
-                        } else {
-                            msgs.add(UiMessage.Assistant(text = newText, thinking = thinkText.ifBlank { null }))
+                        val lastStreaming = msgs.indexOfLast { it is UiMessage.Assistant && it.streaming }
+                        when {
+                            lastStreaming >= 0 -> {
+                                val prev = msgs[lastStreaming] as UiMessage.Assistant
+                                val mergedThink = listOfNotNull(prev.thinking, thinkText.ifBlank { null })
+                                    .joinToString("\n").ifBlank { null }
+                                msgs[lastStreaming] = prev.copy(
+                                    text = newText.ifBlank { prev.text },
+                                    thinking = mergedThink,
+                                    streaming = false,
+                                )
+                            }
+                            newText.isNotBlank() -> {
+                                // 可见回答（无前置流式草稿）：单独成泡。
+                                msgs.add(UiMessage.Assistant(text = newText, thinking = thinkText.ifBlank { null }))
+                            }
+                            else -> {
+                                // 只有 thinking：并入最后一条「无文本」工作气泡，
+                                // 避免工具调用之间每次中间思考都各自成泡。
+                                val lastWork = msgs.indexOfLast { it is UiMessage.Assistant && it.text.isBlank() }
+                                if (lastWork >= 0) {
+                                    val prev = msgs[lastWork] as UiMessage.Assistant
+                                    val mergedThink = listOfNotNull(prev.thinking, thinkText.ifBlank { null })
+                                        .joinToString("\n").ifBlank { null }
+                                    msgs[lastWork] = prev.copy(thinking = mergedThink)
+                                } else {
+                                    msgs.add(UiMessage.Assistant(thinking = thinkText.ifBlank { null }))
+                                }
+                            }
                         }
                     }
                     s.copy(messages = msgs)
@@ -235,19 +252,21 @@ class ChatViewModel(
             is ServerMessage.ToolUse -> {
                 _state.update { s ->
                     val msgs = s.messages.toMutableList()
-                    msgs.add(
-                        UiMessage.Assistant(
-                            toolCalls = listOf(
-                                ToolCallInfo(
-                                    m.toolName,
-                                    summarizeTool(m.toolName, m.input),
-                                    m.input,
-                                    toolUseId = m.toolUseId,
-                                    done = false,
-                                )
-                            )
-                        )
+                    val info = ToolCallInfo(
+                        m.toolName,
+                        summarizeTool(m.toolName, m.input),
+                        m.input,
+                        toolUseId = m.toolUseId,
+                        done = false,
                     )
+                    // 连续的工具调用合并进同一个「工作中」气泡（无可见文本的那条），
+                    // 避免一轮里 N 次工具调用变成 N 个独立气泡、在手机上重复刷屏。
+                    val last = msgs.lastOrNull()
+                    if (last is UiMessage.Assistant && last.text.isBlank()) {
+                        msgs[msgs.lastIndex] = last.copy(toolCalls = last.toolCalls + info)
+                    } else {
+                        msgs.add(UiMessage.Assistant(toolCalls = listOf(info)))
+                    }
                     s.copy(messages = msgs)
                 }
             }
@@ -355,7 +374,7 @@ class ChatViewModel(
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
     private fun startPersisting() {
         val s = store ?: return
         viewModelScope.launch {
@@ -419,21 +438,27 @@ private fun parseSession(el: JsonElement): SessionInfo? {
     val o = el as? JsonObject ?: return null
     val id = o.strAny("sessionId", "session_id", "id")
     if (id.isBlank()) return null
-    val title = o.strAny("summary", "title", "name", "path").ifBlank { "（无摘要）" }
-    val ts = o.longAny("timestamp", "createdAt", "updatedAt", "time")
+    val title = o.strAny("summary", "customTitle", "firstPrompt", "title", "name", "path")
+        .ifBlank { "（无摘要）" }
+    val ts = o.longAny("lastModified", "timestamp", "createdAt", "updatedAt", "time")
     return SessionInfo(id, title, ts)
 }
 
 private fun rebuildMessage(el: JsonElement): UiMessage? {
     val o = el as? JsonObject ?: return null
+    // SDK 的 SessionMessage 把真正的 { role, content } 嵌在 `message` 字段里，
+    // 顶层只有 type/uuid/session_id 等。从 message.content 取文本与工具调用，
+    // 否则读到的永远是空 → 载入会话一片空白。
+    val inner = o["message"] as? JsonObject
+    val content = inner?.get("content") ?: o["content"]
     return when (o.strAny("role", "type")) {
         "user" -> {
-            val text = contentText(o["content"])
+            val text = contentText(content)
             if (text.isBlank()) null else UiMessage.User(text)
         }
         "assistant" -> {
-            val text = contentText(o["content"])
-            val tools = contentToolUses(o["content"])
+            val text = contentText(content)
+            val tools = contentToolUses(content)
             if (text.isBlank() && tools.isEmpty()) null
             else UiMessage.Assistant(text = text, toolCalls = tools)
         }
