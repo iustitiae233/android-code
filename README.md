@@ -15,28 +15,83 @@
 
 ## 快速开始
 
-### 1. 后端
+### 前置条件
+
+- **后端宿主（电脑）**：已装 [Claude Code](https://claude.ai/download) 并用 `claude` 登录过（Agent SDK 复用本机 `~/.claude` 凭证）；Node.js 18+（建议 20+）。
+- **手机**：Android 8.0（API 26）及以上。
+- **网络**三选一，决定手机端怎么填地址：同 WiFi 局域网（最简单）/ 公网加密（Cloudflare 隧道 `wss://`，推荐）/ 公网明文自建（自己的域名 `ws://`，token 不加密，仅自用）。
+
+> Windows 用 `copy` / `cmd`，macOS/Linux 用 `cp` / 普通 shell，下文两种都给。
+
+### 1. 配置并启动后端
 
 ```bash
 cd backend
-copy .env.example .env          # Windows；macOS/Linux: cp .env.example .env
-# 编辑 .env：把 AUTH_TOKEN 改成你自己的长随机串
+copy .env.example .env          # macOS/Linux: cp .env.example .env
 npm install
-npm run dev                     # 启动，监听 ws://localhost:8787
 ```
 
-凭证：SDK 默认复用本机 `~/.claude` 凭证（你用 `claude` 登录的那个）。本机当前用的是**智谱 GLM-5.2 兼容 API**（见 `~/.claude/settings.json` 的 `ANTHROPIC_BASE_URL`），SDK 会自动使用，无需额外配置。若想用原生 Anthropic，改那两个 env 即可。
+编辑 `.env`（完整字段）：
 
-冒烟测试（不依赖手机）：
+| 变量 | 说明 | 示例 |
+|---|---|---|
+| `AUTH_TOKEN` | **必填**。手机端鉴权用，自己设长随机串，两边一致 | 见下方生成命令 |
+| `PORT` | 监听端口 | `8787` |
+| `DEFAULT_CWD` | Claude Code 工作目录（读写文件范围） | `C:\Users\you\projects` |
+| `MODEL` | 模型，留空则用本机 `claude` 配置 | `claude-sonnet-4-5` |
+| `PERMISSION_MODE` | 默认权限模式 | `default` |
+| `ALLOWED_PERMISSION_MODES` | 手机端可远程切换的模式（逗号分隔），留空=全部 | `default,acceptEdits,plan` |
+| `LOG_LEVEL` | 日志级别 `debug/info/warn/error` | `info` |
+
+生成 `AUTH_TOKEN`（任选其一）：
+
+```bash
+node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"   # 跨平台
+openssl rand -hex 24                                                       # macOS/Linux
+```
+
+启动：
+
+```bash
+npm run dev        # 开发热重载；监听 ws://localhost:8787
+# 生产：npm run build && npm start   （务必配 pm2 / systemd / Docker restart=always，见「常见问题」）
+```
+
+看到这几行即成功：
+
+```
+✅ Claude Remote 后端已启动: ws://localhost:8787
+   工作目录 : ...
+   权限模式 : default
+```
+
+**用哪个模型？** SDK 复用本机 `~/.claude` 凭证，无需在后端额外配 key：
+
+- **原生 Anthropic**：本机 `claude` 登录过即可。
+- **智谱 GLM 等兼容端点**：在 `~/.claude/settings.json` 设 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_AUTH_TOKEN`（即你 `claude` 本来在用的那套），SDK 自动走它，后端无感。
+
+### 2. 验证后端（冒烟测试，不依赖手机）
 
 ```bash
 npm i -g wscat
 wscat -c ws://localhost:8787
-{"type":"auth","token":"<你的AUTH_TOKEN>"}
-{"type":"send_message","prompt":"用一句话介绍你自己"}
+{"type":"auth","token":"<你的AUTH_TOKEN>"}              # 应回 {"type":"hello","ok":true}
+{"type":"send_message","prompt":"用一句话介绍你自己"}    # 开始流式返回
 ```
 
-### 2. 外网穿透（仅外网访问需要）
+能收到流式回复 = 后端 + 模型凭证都正常。
+
+### 3. 让手机连上（三种网络场景）
+
+按你的场景选地址：
+
+| 场景 | 手机端填 | 怎么得到 |
+|---|---|---|
+| 同 WiFi 局域网 | `ws://<电脑局域网IP>:8787` | Win `ipconfig` / Mac `ipconfig getifaddr en0` / Linux `hostname -I` |
+| 公网加密（推荐） | `wss://<隧道域名>` | 见下方 Cloudflare 隧道 |
+| 公网明文自建 | `ws://<你的域名>` | 你自己反代到 8787；token 明文，仅自用 |
+
+公网加密（Cloudflare 隧道）：
 
 ```bash
 winget install --id Cloudflare.cloudflared      # 或 brew install cloudflared
@@ -44,18 +99,25 @@ cloudflared tunnel --url http://localhost:8787
 # 输出 https://<random>.trycloudflare.com → 手机端填 wss://<random>.trycloudflare.com
 ```
 
-局域网同 WiFi 则直接用 `ws://电脑IP:8787`，无需穿透。
+### 4. 安装并配置手机端
 
-### 3. 手机端
-
-用 **Android Studio** 打开 `android/` 目录 → Run ▶ → 首次进入设置页填地址 + token → 保存即连接。详见 [`android/README.md`](android/README.md)。
-
-或命令行出 APK（需 JDK 17）：
+**出 APK**（需 JDK 17，Android Studio 自带；详见 [`android/README.md`](android/README.md)）：
 
 ```bash
 cd android && ./gradlew assembleDebug
 # 产物：app/build/outputs/apk/debug/app-debug.apk
 ```
+
+**装到手机**（任选）：
+
+```bash
+adb install app/build/outputs/apk/debug/app-debug.apk   # 数据线 adb
+# 或把 apk 传到手机，文件管理器点击安装（需开启「未知来源」）
+```
+
+或用 **Android Studio** 打开 `android/` 目录 → Run ▶ 直接装到手机调试。
+
+**首次配置**：打开 app → 自动进设置页 → 填「WebSocket 地址」+「AUTH_TOKEN」（与后端 `.env` 完全一致）→ 保存 → 自动连接，顶部出现「已连接」→ 发条消息验证。
 
 ## 关于「工具审批弹窗」
 
@@ -78,6 +140,17 @@ cd android && ./gradlew assembleDebug
 - **权限模式白名单（后端）**：`ALLOWED_PERMISSION_MODES` env 限定手机端可远程切换的模式。公网暴露时建议收紧成 `default,acceptEdits,plan`，这样即便 token 泄露，攻击者也无法把后端切到 `bypassPermissions` 任意执行。
 - **并发守卫**：同一连接上一轮未结束就发新消息会被后端拒绝（返回 `busy`），避免流互相覆盖产生僵尸查询。
 - **审批队列**：一轮里多个工具需要审批时，手机端按队列依次弹窗（不再只显示最后一个）。
+
+## 常见问题
+
+- **连接错误：Token 无效** → 手机端 token 与后端 `AUTH_TOKEN` 不一致。后端以 `1008` 关闭并**停止重连**，改对 token 后重开 app。
+- **连上了，发消息却报 `query 异常`** → 多半是模型凭证：本机没登录 `claude`，或 GLM 的 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_BASE_URL` 配错。先在电脑上把 `claude` 跑通再来。
+- **`ws://` 连公网时顶部提示「token 未加密」** → 正常安全提示，不会拦截；能用 `wss://` 更好。
+- **Cloudflare 隧道 502 / 后端没监听** → 后端崩了但进程没退（僵尸）。生产务必配进程管理器（pm2 / systemd / Docker `restart=always`）让它崩了自动拉起。
+- **局域网连不上** → 电脑防火墙放行 `PORT`（默认 8787）；确认手机与电脑同一 WiFi。
+- **「上一轮仍在进行，请先中断」** → 同一连接禁止并发，点输入框旁 ⏹ 中断当前轮再发。
+- **装了新版没当成升级** → `versionCode` 由 git 提交数生成，**先 commit 再构建**版本号才会涨（见下文「版本号」）。
+- **后台没收到完成通知** → Android 13+ 需授权通知（首次进聊天页会申请）；部分厂商系统需手动允许「通知」与「后台运行」。
 
 ## 开发与测试
 
